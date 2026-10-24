@@ -22,7 +22,7 @@ describe("Selective harvesting (v2.7)", function () {
       { id: ids[0], wallet: partner.address, bps: 4000, name: "Partners" },
       { id: ids[1], wallet: core.address, bps: 3500, name: "Core" },
       { id: ids[2], wallet: treasury.address, bps: 2500, name: "Treasury" },
-    ], true], { kind: "uups", initializer: "initialize" });
+    ], true, await tokenA.getAddress()], { kind: "uups", initializer: "initialize" });
     await vault.setWrappedNativeToken(await tokenA.getAddress());
   });
 

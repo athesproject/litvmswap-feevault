@@ -44,6 +44,13 @@ import "./interfaces/IUniswapV3Factory.sol";
  * beneficiary what it is owed, to that beneficiary only), movePending (admin moves
  * owed balances off a compromised wallet) and enableProtocolFee (anyone switches on
  * the protocol fee for real pools of the V3 factory, at the default the admin set).
+ *
+ * v2.9 (LitVM team audit, plan/litvm-team-audit-triage.md): deposits record what actually
+ * arrived (ATH-08); no hard-coded wrapped-native fallback, the address must be a contract
+ * (ATH-14); distribution counters count what was credited and report the rounding
+ * remainder, which stays for the next run (ATH-14); distributeRegistered reverts on a split
+ * that is not 100% and replaceBeneficiaries sets the whole split at once (ATH-18).
+ * No storage changes.
  */
 contract DexFeeVaultUpgradeable is
     Initializable,
@@ -156,22 +163,29 @@ contract DexFeeVaultUpgradeable is
     event DefaultFeeProtocolSet(uint8 feeProtocol0, uint8 feeProtocol1);
     event ProtocolFeeExemptSet(address indexed pool, bool exempt);
     event WrappedNativeTokenSet(address token);
+    // v2.9
+    /// @dev Rounding left over by a distribution; it stays unallocated and goes out with the next one.
+    event DistributionRemainder(address indexed token, uint256 amount);
 
     error UnknownFunction();
     error AmountReserved();
     error NotV3Factory();
     error InvalidFeeProtocol();
     error ProtocolFeeDefaultUnset();
+    error UnexpectedNativeValue();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() { _disableInitializers(); }
 
+    /// @param wrappedNative_ The chain's wrapped native token (wzkLTC on LitVM); v2.9 requires it up front.
     function initialize(
         address admin,
         BeneficiaryInput[] memory initialBeneficiaries,
-        bool allowPublicDistribution
+        bool allowPublicDistribution,
+        address wrappedNative_
     ) external initializer {
         if (admin == address(0)) revert InvalidAddress();
+        _setWrappedNativeToken(wrappedNative_);
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
@@ -189,6 +203,8 @@ contract DexFeeVaultUpgradeable is
                 initialBeneficiaries[i].name
             );
         }
+        // v2.9: a split is complete or not set at all (ATH-18).
+        if (totalBps != 0 && totalBps != MAX_BPS) revert InvalidBpsTotal(totalBps, MAX_BPS);
     }
 
     receive() external payable {
@@ -374,12 +390,10 @@ contract DexFeeVaultUpgradeable is
      *         registration needed. Any new position received since last cycle is
      *         automatically included.
      */
+    /// @dev v2.9: no chain-specific fallback. The address is set at initialization (or, on proxies set up
+    ///      before v2.9, by setWrappedNativeToken) and must be a contract.
     function _getWrappedNative() internal view returns (address) {
-        address w = wrappedNativeToken;
-        if (w == address(0)) {
-            w = 0x315374AA9b5536037Cc1Efeea2439CCC0913A77e; // default wzkLTC on LitVM
-        }
-        return w;
+        return wrappedNativeToken;
     }
 
     function _harvestV3Positions() internal returns (uint256 totalPositions) {
@@ -418,7 +432,8 @@ contract DexFeeVaultUpgradeable is
     }
 
     function _distributeAll(bool autoPush) internal {
-        if (totalBps != MAX_BPS) return;
+        // v2.9: an incomplete split fails loudly, like every other distribution path (ATH-18).
+        if (totalBps != MAX_BPS) revert InvalidBpsTotal(totalBps, MAX_BPS);
         if (address(this).balance > totalReservedETHFees) _distributeETHInternal(autoPush);
         uint256 n = registeredDistributionTokens.length;
         for (uint256 i = 0; i < n; i++) {
@@ -610,13 +625,7 @@ contract DexFeeVaultUpgradeable is
     // Manual fee deposit (aggregator / one-off)
     // ──────────────────────────────────────────────────────────────────────
 
-    function depositFee(address token, uint256 amount) external whenNotPaused nonReentrant {
-        if (token == address(0)) revert InvalidAddress();
-        if (amount == 0) revert ZeroAmount();
-        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-        emit FeeDeposited(token, msg.sender, amount);
-    }
-
+    // v2.9: depositFee is gone; depositAggregatorFee(token, amount, "") does the same (smaller contract).
     function depositAggregatorFee(
         address token, uint256 amount, bytes calldata metadata
     ) external payable whenNotPaused nonReentrant {
@@ -626,10 +635,19 @@ contract DexFeeVaultUpgradeable is
             cumulativeAggregatorFeesETH += msg.value;
             emit FeeReceived(msg.sender, msg.value);
         } else {
+            if (msg.value != 0) revert UnexpectedNativeValue();
             if (amount == 0) revert ZeroAmount();
-            IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-            emit FeeDeposited(token, msg.sender, amount);
+            emit FeeDeposited(token, msg.sender, _pullToken(token, amount));
         }
+    }
+
+    /// @dev v2.9: what actually arrived, so a token that takes a fee on transfer is recorded at its real
+    ///      amount (ATH-08). Distribution already works from balances.
+    function _pullToken(address token, uint256 amount) internal returns (uint256 received) {
+        uint256 before = IERC20(token).balanceOf(address(this));
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+        received = IERC20(token).balanceOf(address(this)) - before;
+        if (received == 0) revert ZeroAmount();
     }
 
     // v2.8: collectUniswapV3Fees and collectUniswapV2Fees are gone; collectV3Positions
@@ -639,9 +657,14 @@ contract DexFeeVaultUpgradeable is
     // Beneficiary Management
     // ──────────────────────────────────────────────────────────────────────
 
+    /// @notice Change one beneficiary's wallet, share or name. v2.9: the split must still add up to exactly
+    ///         100% afterwards, so this suits wallet changes; change the split with replaceBeneficiaries (ATH-18).
     function setBeneficiary(bytes32 id, address wallet, uint16 bps, string calldata name)
         external onlyRole(FEE_MANAGER_ROLE)
-    { _setBeneficiary(id, wallet, bps, name); }
+    {
+        _setBeneficiary(id, wallet, bps, name);
+        if (totalBps != MAX_BPS) revert InvalidBpsTotal(totalBps, MAX_BPS);
+    }
 
     function _setBeneficiary(bytes32 id, address wallet, uint16 bps, string memory name) internal {
         if (id == bytes32(0)) revert InvalidBeneficiary();
@@ -656,19 +679,24 @@ contract DexFeeVaultUpgradeable is
         emit BeneficiaryUpdated(id, wallet, bps, name);
     }
 
-    function removeBeneficiary(bytes32 id) external onlyRole(FEE_MANAGER_ROLE) {
-        Beneficiary storage b = beneficiaries[id];
-        if (!b.isActive) revert BeneficiaryNotFound(id);
-        totalBps -= b.bps;
-        b.isActive = false; b.bps = 0;
+    /**
+     * @notice v2.9: replace the whole split in one call; it must add up to exactly 100% (ATH-18). This also
+     *         removes beneficiaries (leave them out); removeBeneficiary is gone because it always broke the
+     *         split. Wallets keep what they are already owed.
+     */
+    function replaceBeneficiaries(BeneficiaryInput[] calldata list) external onlyRole(FEE_MANAGER_ROLE) {
         uint256 len = beneficiaryIds.length;
         for (uint256 i = 0; i < len; i++) {
-            if (beneficiaryIds[i] == id) {
-                beneficiaryIds[i] = beneficiaryIds[len - 1];
-                beneficiaryIds.pop(); break;
-            }
+            Beneficiary storage b = beneficiaries[beneficiaryIds[i]];
+            b.isActive = false; b.bps = 0;
+            emit BeneficiaryRemoved(beneficiaryIds[i]);
         }
-        emit BeneficiaryRemoved(id);
+        delete beneficiaryIds;
+        totalBps = 0;
+        for (uint256 i = 0; i < list.length; i++) {
+            _setBeneficiary(list[i].id, list[i].wallet, list[i].bps, list[i].name);
+        }
+        if (totalBps != MAX_BPS) revert InvalidBpsTotal(totalBps, MAX_BPS);
     }
 
     function setPublicDistributionAllowed(bool allowed) external onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -697,18 +725,22 @@ contract DexFeeVaultUpgradeable is
     function _distributeETHInternal(bool autoPush) internal {
         uint256 dist = address(this).balance - totalReservedETHFees;
         if (dist == 0) revert NoFeesToDistribute();
-        cumulativeDistributedETH += dist;
+        uint256 credited;
         uint256 len = beneficiaryIds.length;
         for (uint256 i = 0; i < len; i++) {
             Beneficiary storage b = beneficiaries[beneficiaryIds[i]];
             if (!b.isActive || b.bps == 0) continue;
             uint256 share = (dist * b.bps) / MAX_BPS;
             if (share == 0) continue;
+            credited += share;
             bool pushed;
             if (autoPush) (pushed,) = payable(b.wallet).call{value: share}("");
             if (!pushed) { pendingETH[b.wallet] += share; totalReservedETHFees += share; }
         }
-        emit FeesDistributed(address(0), dist, autoPush);
+        // v2.9: count what was credited; the rounding remainder stays for the next run (ATH-14).
+        cumulativeDistributedETH += credited;
+        if (dist > credited) emit DistributionRemainder(address(0), dist - credited);
+        emit FeesDistributed(address(0), credited, autoPush);
     }
 
     function distributeToken(address token, bool autoPush) public whenNotPaused nonReentrant canDistribute {
@@ -720,18 +752,21 @@ contract DexFeeVaultUpgradeable is
     function _distributeTokenInternal(address token, uint256 balance, bool autoPush) internal {
         uint256 dist = balance - totalReservedTokenFees[token];
         if (dist == 0) revert NoFeesToDistribute();
+        uint256 credited;
         uint256 len = beneficiaryIds.length;
         for (uint256 i = 0; i < len; i++) {
             Beneficiary storage b = beneficiaries[beneficiaryIds[i]];
             if (!b.isActive || b.bps == 0) continue;
             uint256 share = (dist * b.bps) / MAX_BPS;
             if (share == 0) continue;
+            credited += share;
             // v2.8: a push that fails stays owed, as for ETH, instead of reverting the run.
             if (autoPush && _tryTransfer(token, b.wallet, share)) continue;
             pendingTokens[token][b.wallet] += share;
             totalReservedTokenFees[token] += share;
         }
-        emit FeesDistributed(token, dist, autoPush);
+        if (dist > credited) emit DistributionRemainder(token, dist - credited);
+        emit FeesDistributed(token, credited, autoPush);
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -818,9 +853,14 @@ contract DexFeeVaultUpgradeable is
     function getBeneficiary(bytes32 id) external view returns (Beneficiary memory) { return beneficiaries[id]; }
     function getAllBeneficiaryIds() external view returns (bytes32[] memory) { return beneficiaryIds; }
 
-    function version() external pure virtual returns (string memory) { return "2.8.0"; }
+    function version() external pure virtual returns (string memory) { return "2.9.0"; }
 
     function setWrappedNativeToken(address _token) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _setWrappedNativeToken(_token);
+    }
+
+    function _setWrappedNativeToken(address _token) internal {
+        if (_token.code.length == 0) revert InvalidAddress();
         wrappedNativeToken = _token;
         emit WrappedNativeTokenSet(_token);
     }

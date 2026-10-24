@@ -21,6 +21,9 @@ module.exports = {
     hardhat: {
       chainId: 31337,
       hardfork: "cancun",
+      // Only the test mock that extends the vault (DexFeeVaultV2Mock) is above EIP-170; the real contracts are
+      // checked against the limit in test/ContractSize.test.js. Fork rehearsals (FORK=1) keep the real limit.
+      allowUnlimitedContractSize: !process.env.FORK,
       // FORK=1 runs the local network against real LitVM state, so an upgrade
       // can be rehearsed end-to-end before anything is broadcast for real.
       ...(process.env.FORK

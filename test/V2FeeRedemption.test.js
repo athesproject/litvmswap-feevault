@@ -36,7 +36,8 @@ describe("V2 protocol-fee redemption (v2.6)", function () {
       { id: ids[0], wallet: partner.address, bps: 4000, name: "Partners" },
       { id: ids[1], wallet: core.address, bps: 3500, name: "Core" },
       { id: ids[2], wallet: treasury.address, bps: 2500, name: "Treasury" },
-    ], true], { kind: "uups", initializer: "initialize" });
+    ], true, await (await (await ethers.getContractFactory("MockERC20")).deploy("Wrapped Native", "WNATIVE")).getAddress()],
+    { kind: "uups", initializer: "initialize" });
 
     // Point wrapped-native at a real contract so harvest attribution has something
     // to measure; on LitVM this is wzkLTC.
@@ -153,7 +154,8 @@ describe("Registry self-sync (v2.6)", function () {
       { id: ids[0], wallet: partner.address, bps: 4000, name: "Partners" },
       { id: ids[1], wallet: core.address, bps: 3500, name: "Core" },
       { id: ids[2], wallet: treasury.address, bps: 2500, name: "Treasury" },
-    ], true], { kind: "uups", initializer: "initialize" });
+    ], true, await (await (await ethers.getContractFactory("MockERC20")).deploy("Wrapped Native", "WNATIVE")).getAddress()],
+    { kind: "uups", initializer: "initialize" });
 
     await vault.setFactories(await factory.getAddress(), ethers.ZeroAddress);
   });

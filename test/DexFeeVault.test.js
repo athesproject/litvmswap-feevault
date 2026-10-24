@@ -3,7 +3,7 @@ const { ethers, upgrades } = require("hardhat");
 
 describe("DexFeeVaultUpgradeable - Complete Test Suite", function () {
   let vault;
-  let mockTokenA, mockTokenB;
+  let mockTokenA, mockTokenB, wrappedNative;
   let mockV3Manager;
   let mockV2Pair;
 
@@ -48,11 +48,13 @@ describe("DexFeeVaultUpgradeable - Complete Test Suite", function () {
       { id: treasuryId, wallet: treasury.address, bps: 2500, name: "Treasury" },
     ];
 
-    // Deploy DexFeeVaultUpgradeable UUPS Proxy
+    // Deploy DexFeeVaultUpgradeable UUPS Proxy (v2.9: the wrapped native token is set at initialization;
+    // a token no test moves, so revenue attribution behaves as before)
+    wrappedNative = await MockERC20.deploy("Wrapped Native", "WNATIVE");
     const DexFeeVault = await ethers.getContractFactory("DexFeeVaultUpgradeable");
     vault = await upgrades.deployProxy(
       DexFeeVault,
-      [owner.address, initialBeneficiaries, true],
+      [owner.address, initialBeneficiaries, true, await wrappedNative.getAddress()],
       { kind: "uups", initializer: "initialize" }
     );
     await vault.waitForDeployment();
@@ -82,7 +84,7 @@ describe("DexFeeVaultUpgradeable - Complete Test Suite", function () {
 
     it("should prevent re-initialization", async function () {
       await expect(
-        vault.initialize(owner.address, [], false)
+        vault.initialize(owner.address, [], false, await wrappedNative.getAddress())
       ).to.be.revertedWithCustomError(vault, "InvalidInitialization");
     });
   });
@@ -102,11 +104,11 @@ describe("DexFeeVaultUpgradeable - Complete Test Suite", function () {
       expect(await ethers.provider.getBalance(await vault.getAddress())).to.equal(depositAmount);
     });
 
-    it("should accept ERC20 fee deposits via depositFee", async function () {
+    it("should accept ERC20 fee deposits via depositAggregatorFee", async function () {
       const depositAmount = ethers.parseEther("500");
       await mockTokenA.approve(await vault.getAddress(), depositAmount);
 
-      await expect(vault.depositFee(await mockTokenA.getAddress(), depositAmount))
+      await expect(vault.depositAggregatorFee(await mockTokenA.getAddress(), depositAmount, "0x"))
         .to.emit(vault, "FeeDeposited")
         .withArgs(await mockTokenA.getAddress(), owner.address, depositAmount);
 
@@ -169,28 +171,46 @@ describe("DexFeeVaultUpgradeable - Complete Test Suite", function () {
   });
 
   describe("4. Dynamic BPS Beneficiary Management", function () {
-    it("should allow FEE_MANAGER to update beneficiary percentage", async function () {
-      // Lower Core to 2500 (25%) first, then increase Partner to 5000 (50%), keeping total at 10000 BPS
-      await vault.setBeneficiary(coreId, core.address, 2500, "Core Team V2");
-      await vault.setBeneficiary(partnerId, partner.address, 5000, "Partners V2");
+    it("should allow FEE_MANAGER to change the split in one call (v2.9 replaceBeneficiaries)", async function () {
+      await vault.replaceBeneficiaries([
+        { id: partnerId, wallet: partner.address, bps: 5000, name: "Partners V2" },
+        { id: coreId, wallet: core.address, bps: 2500, name: "Core Team V2" },
+        { id: treasuryId, wallet: treasury.address, bps: 2500, name: "Treasury" },
+      ]);
 
       expect(await vault.totalBps()).to.equal(10000);
       const p = await vault.getBeneficiary(partnerId);
       expect(p.bps).to.equal(5000);
     });
 
-    it("should revert if total BPS exceeds 10000", async function () {
-      await expect(
-        vault.setBeneficiary(partnerId, partner.address, 6000, "Excess Partners")
-      ).to.be.revertedWithCustomError(vault, "InvalidBpsTotal");
+    it("should change one wallet with setBeneficiary, but never leave the split below or above 100%", async function () {
+      await vault.setBeneficiary(coreId, stranger.address, 3500, "Core Team");
+      expect((await vault.getBeneficiary(coreId)).wallet).to.equal(stranger.address);
+      await expect(vault.setBeneficiary(coreId, core.address, 2500, "Core Team"))
+        .to.be.revertedWithCustomError(vault, "InvalidBpsTotal");
+      await expect(vault.setBeneficiary(partnerId, partner.address, 6000, "Excess Partners"))
+        .to.be.revertedWithCustomError(vault, "InvalidBpsTotal");
+      expect(await vault.totalBps()).to.equal(10000);
     });
 
-    it("should allow removing a beneficiary and updating total BPS", async function () {
-      await vault.removeBeneficiary(treasuryId);
+    it("should remove a beneficiary by leaving it out of the new split", async function () {
+      await vault.replaceBeneficiaries([
+        { id: partnerId, wallet: partner.address, bps: 6000, name: "Partners" },
+        { id: coreId, wallet: core.address, bps: 4000, name: "Core Team" },
+      ]);
 
-      expect(await vault.totalBps()).to.equal(7500);
+      expect(await vault.totalBps()).to.equal(10000);
       const t = await vault.getBeneficiary(treasuryId);
       expect(t.isActive).to.be.false;
+      expect(await vault.getAllBeneficiaryIds()).to.deep.equal([partnerId, coreId]);
+    });
+
+    it("should refuse a new split that is not exactly 100%", async function () {
+      await expect(vault.replaceBeneficiaries([
+        { id: partnerId, wallet: partner.address, bps: 6000, name: "Partners" },
+      ])).to.be.revertedWithCustomError(vault, "InvalidBpsTotal");
+      await expect(vault.connect(stranger).replaceBeneficiaries([]))
+        .to.be.revertedWithCustomError(vault, "AccessControlUnauthorizedAccount");
     });
 
     it("should revert when non-FEE_MANAGER attempts setting beneficiary", async function () {

@@ -12,11 +12,17 @@ describe("Audit fixes (v2.8)", function () {
 
   async function deployVault(name = "DexFeeVaultUpgradeable") {
     const Vault = await ethers.getContractFactory(name);
-    return upgrades.deployProxy(Vault, [owner.address, [
+    const args = [owner.address, [
       { id: ids[0], wallet: partner.address, bps: 4000, name: "Partners" },
       { id: ids[1], wallet: core.address, bps: 3500, name: "Core Team" },
       { id: ids[2], wallet: treasury.address, bps: 2500, name: "Treasury" },
-    ], true], { kind: "uups", initializer: "initialize" });
+    ], true];
+    // v2.9 takes the wrapped native token at initialization; the legacy 2.7.1 build does not.
+    if (name === "DexFeeVaultUpgradeable") {
+      const wrapped = await (await ethers.getContractFactory("MockERC20")).deploy("Wrapped Native", "WNATIVE");
+      args.push(await wrapped.getAddress());
+    }
+    return upgrades.deployProxy(Vault, args, { kind: "uups", initializer: "initialize" });
   }
 
   beforeEach(async function () {
@@ -27,7 +33,7 @@ describe("Audit fixes (v2.8)", function () {
   });
 
   it("reports 2.8.0", async function () {
-    expect(await vault.version()).to.equal("2.8.0");
+    expect(await vault.version()).to.equal("2.9.0");
   });
 
   it("V1: a beneficiary cannot re-enter distribution while it is being paid", async function () {
@@ -250,7 +256,7 @@ describe("Audit fixes (v2.8)", function () {
 
     // The plugin refuses the upgrade if the storage layout is incompatible.
     const upgraded = await upgrades.upgradeProxy(await old.getAddress(), await ethers.getContractFactory("DexFeeVaultUpgradeable"), { kind: "uups" });
-    expect(await upgraded.version()).to.equal("2.8.0");
+    expect(await upgraded.version()).to.equal("2.9.0");
     expect(await snap(upgraded)).to.deep.equal(before);
     expect(await upgraded.defaultFeeProtocol0()).to.equal(0n);
 

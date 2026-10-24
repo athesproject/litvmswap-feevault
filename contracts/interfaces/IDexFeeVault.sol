@@ -52,11 +52,9 @@ interface IDexFeeVault {
     error ZeroAmount();
 
     // Functions
-    function depositFee(address token, uint256 amount) external;
     function depositAggregatorFee(address token, uint256 amount, bytes calldata metadata) external payable;
     
     function setBeneficiary(bytes32 id, address wallet, uint16 bps, string calldata name) external;
-    function removeBeneficiary(bytes32 id) external;
     function setPublicDistributionAllowed(bool allowed) external;
 
     function distributeETH(bool autoPush) external;

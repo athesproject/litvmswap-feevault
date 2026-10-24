@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build, reproducibility and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Supply-chain policy (pinned actions and submodules, exact versions, official registry, no install scripts)
+        run: python3 .github/policy.py .
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.21.1
+
+      - name: Install (lockfile only, no install scripts)
+        run: npm ci
+
+      - name: Registry signatures
+        run: npm audit signatures
+
+      - name: Build
+        run: npx hardhat compile
+
+      - name: Tests (include the reproducible-build and contract-size checks)
+        run: npx hardhat test

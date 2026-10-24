@@ -1,12 +1,12 @@
 /**
  * fix-v2-feeto.js
  * ─────────────────────────────────────────────────────────────────────────────
- * Two-step fix for V2 feeTo — run ONCE to fully automate V2 protocol fees.
+ * Historical setup tool (2026): the one-time V2 feeTo fix. On LitVM every role is
+ * now held by the Safe, so use this only against a local fork.
  *
- * The problem:
- *   feeToSetter = 0x48234eD645676b794a4CbC7483513e58cB04e22E
- *   Vault owner = 0x23D542DCEFb00b1f4268E67a0EC1EF4de0A58fe2  (in .env)
- *   They are different wallets → can't do it in one key.
+ * The problem it solved:
+ *   feeToSetter = 0x48234eD645676b794a4CbC7483513e58cB04e22E and the vault owner
+ *   were different wallets, so it could not be done with one key.
  *
  * This script does BOTH steps:
  *   Step A: signs from feeToSetter wallet → setFeeTo(vault)
@@ -17,8 +17,8 @@
  *   - V2 protocol fees (0.05%) flow to vault on every swap — AUTOMATIC
  *   - feeToSetter is now vault-owner, so no 2-wallet dependency ever again
  *
- * Usage:
- *   Add V2_FEE_TO_SETTER_KEY=<privkey of 0x48234e...> to .env
+ * Usage (local fork only, test keys):
+ *   V2_FEE_TO_SETTER_KEY and PRIVATE_KEY from .env, then
  *   node scripts/fix-v2-feeto.js
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -27,8 +27,8 @@ require("dotenv").config();
 const { ethers } = require("ethers");
 
 const RPC                 = process.env.LITVM_RPC_URL || "https://liteforge.rpc.caldera.xyz/infra-partner-http";
-const VAULT_OWNER_KEY     = process.env.PRIVATE_KEY;              // 0x23D542... — already in .env
-const FEE_TO_SETTER_KEY   = process.env.V2_FEE_TO_SETTER_KEY;    // 0x48234e... — add to .env
+const VAULT_OWNER_KEY     = process.env.PRIVATE_KEY;              // local forks only: LitVM admin goes through the Safe
+const FEE_TO_SETTER_KEY   = process.env.V2_FEE_TO_SETTER_KEY;    // local forks only: the V2 feeToSetter is the Safe
 
 const V2_FACTORY = "0x4680BCe1632824d30D2F53656dD610736c3e312e";
 const VAULT      = "0xF2DF37067a8Af0e9ae617c96C887B2FdA8eA3f10";

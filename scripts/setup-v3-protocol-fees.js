@@ -26,7 +26,7 @@ const { ethers } = require("ethers");
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const RPC         = process.env.LITVM_RPC_URL || "https://liteforge.rpc.caldera.xyz/infra-partner-http";
-const PRIVATE_KEY = process.env.PRIVATE_KEY;  // must be factory owner: 0x23D542...
+const PRIVATE_KEY = process.env.PRIVATE_KEY;  // local forks only: the V3 factory owner is the vault, administered by the Safe
 
 const V3_FACTORY  = "0xDE6763A041f8Fc94CA2EE5933736F78f6D1A11c5";
 const VAULT       = "0xF2DF37067a8Af0e9ae617c96C887B2FdA8eA3f10";
