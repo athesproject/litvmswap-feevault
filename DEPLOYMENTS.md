@@ -10,6 +10,7 @@
 | Entrypoint proxy | `0x5E19EB2A6BA30892CCe33f93D7Fb24D498512266` | live |
 | Entrypoint implementation 2.0.0 | `0x584CFC4cedee87F458c570A229C6633Afea86C2A` | live since 2026-10-25: Safe transaction `0xea7a3a4f4498b6181dbf7b4fcbb234496fda7683274e74b9c06c78deb4c93495` (block 64,411,045) |
 | Entrypoint implementation 1.0.0 | `0xdB23c1d071C274872f5Ba97F66d0182475b617c2` | replaced 2026-10-25 (source: `contracts/legacy/AGGFlowEntrypointUpgradeable.sol`) |
+| Timelock (48 h) | `0x35774e0172571314fcDa7d602ea4D3410EE37188` | since 2026-10-25 (Safe transaction `0x2bb206cd7317bedf68ef253fb100898411d8eeb275748e9d82fde96aa4796d0b`, block 64,462,396): holds the vault's `DEFAULT_ADMIN_ROLE` and `UPGRADER_ROLE` and owns the entrypoint; the Safe keeps `FEE_MANAGER_ROLE` and `PAUSER_ROLE` |
 
 The 2.9.0 and 2.0.0 implementations are deployed by the Safe with CreateCall `performCreate2` (deployer = the Safe):
 

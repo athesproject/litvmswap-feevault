@@ -24,8 +24,10 @@ Collects the protocol's revenue and splits it between beneficiaries.
 - **Accounting.** Deposits record what actually arrived; distribution counters count what was credited, and the
   rounding remainder (reported by `DistributionRemainder`) stays for the next split. The vault always holds at least
   what it owes.
-- **Administration.** On LitVM every role is held by the 2-of-3 Safe `0x868b8B48db5DDE602D24960A606A5A8F93333bf9`;
-  upgrades and `DEFAULT_ADMIN_ROLE` move behind a 48-hour timelock, pause stays immediate.
+- **Administration.** On LitVM `DEFAULT_ADMIN_ROLE` and `UPGRADER_ROLE` belong to the 48-hour timelock
+  `0x35774e0172571314fcDa7d602ea4D3410EE37188` (since 2026-10-25; the 2-of-3 Safe
+  `0x868b8B48db5DDE602D24960A606A5A8F93333bf9` proposes and executes, a guardian can cancel). `FEE_MANAGER_ROLE` and
+  `PAUSER_ROLE` stay with the Safe, so a pause is immediate. The entrypoint is owned by the same timelock.
 
 ## Aggregator entrypoint
 
